@@ -1,0 +1,41 @@
+name: Build Midnight Node Binary
+
+on:
+  workflow_dispatch:  # Manual trigger
+  schedule:
+    - cron: '0 0 * * *'  # Daily at midnight UTC
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout upstream repo
+        uses: actions/checkout@v4
+        with:
+          repository: midnightntwrk/midnight-node
+          path: midnight-node
+
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Build binary
+        working-directory: ./midnight-node
+        run: cargo build --release
+
+      - name: Prepare artifacts
+        run: |
+          mkdir artifacts
+          cp midnight-node/target/release/midnight-node artifacts/
+          tar -czf midnight-node-linux-amd64.tar.gz -C artifacts midnight-node
+
+      - name: Create/Release GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest-${{ github.run_id }}
+          name: Latest Build
+          files: midnight-node-linux-amd64.tar.gz
+          draft: false
+          prerelease: true
