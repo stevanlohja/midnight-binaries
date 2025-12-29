@@ -1,9 +1,9 @@
-name: Build Midnight Node Binary
+name: Build Midnight Node Binary and .deb Package
 
 on:
-  workflow_dispatch:  # Manual trigger
+  workflow_dispatch:    # Allows manual triggering
   schedule:
-    - cron: '0 0 * * *'  # Daily at midnight UTC
+    - cron: '0 0 * * *'  # Runs daily at midnight UTC (checks for upstream changes)
 
 jobs:
   build:
@@ -15,27 +15,69 @@ jobs:
           repository: midnightntwrk/midnight-node
           path: midnight-node
 
-      - name: Set up Rust
-        uses: actions-rs/toolchain@v1
+      - name: Install system dependencies (including protoc)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
           override: true
 
-      - name: Build binary
+      - name: Install cargo-deb (for .deb package generation)
+        run: cargo install cargo-deb
+
+      - name: Cache cargo registry and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            midnight-node/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('midnight-node/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Build binary (release)
         working-directory: ./midnight-node
-        run: cargo build --release
+        run: cargo build --release --locked
+
+      - name: Build .deb package
+        working-directory: ./midnight-node
+        run: cargo deb
 
       - name: Prepare artifacts
         run: |
-          mkdir artifacts
+          mkdir -p artifacts
           cp midnight-node/target/release/midnight-node artifacts/
-          tar -czf midnight-node-linux-amd64.tar.gz -C artifacts midnight-node
+          cp midnight-node/target/debian/*.deb artifacts/
+          tar -czf artifacts/midnight-node-linux-amd64.tar.gz -C artifacts midnight-node
 
-      - name: Create/Release GitHub Release
+      - name: Get version from Cargo.toml (fallback to timestamp)
+        id: version
+        run: |
+          VERSION=$(grep '^version' midnight-node/Cargo.toml | head -1 | cut -d '"' -f2)
+          if [ -z "$VERSION" ]; then
+            VERSION="snapshot-$(date +%Y%m%d)"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Create or update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: latest-${{ github.run_id }}
-          name: Latest Build
-          files: midnight-node-linux-amd64.tar.gz
+          tag_name: v${{ steps.version.outputs.version }}-${{ github.run_id }}
+          name: Midnight Node ${{ steps.version.outputs.version }}
+          body: |
+            Automated build of https://github.com/midnightntwrk/midnight-node
+
+            - Binary: `midnight-node` (Linux amd64)
+            - .deb package for Ubuntu/Debian
+            - Built on ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          files: |
+            artifacts/midnight-node-linux-amd64.tar.gz
+            artifacts/*.deb
           draft: false
           prerelease: true
+          generate_release_notes: false
